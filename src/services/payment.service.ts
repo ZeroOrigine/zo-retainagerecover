@@ -27,6 +27,7 @@ export async function createCheckoutSession(
     success_url: `${PROJECT_CONFIG.siteUrl}/dashboard?checkout=success`,
     cancel_url: `${PROJECT_CONFIG.siteUrl}/pricing?checkout=cancelled`,
     metadata: {
+      product: PROJECT_CONFIG.projectId,
       user_id: userId,
       project_id: PROJECT_CONFIG.projectId,
     },
