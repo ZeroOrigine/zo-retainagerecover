@@ -1,4 +1,22 @@
 {
-  "present": false,
-  "_note": "Sentinel. The deploy layer overwrites this file per product with real birth data (name, tagline, born, scores, cost, funders, story_url). While present is false or name is absent, /about returns 404. This file MUST exist so the static import never breaks the build (zeroorigine.com ships the sentinel and gets no About page)."
+  "name": "RetainageRecover",
+  "tagline": "Never forget to collect the retainage that's sitting on the table.",
+  "description": "Simple retainage % + completion-date tracker that outputs a ready-to-send release invoice on the eligible date.",
+  "born": "2026-08-14T15:15:52.486631+00:00",
+  "research_score": 7.1,
+  "ethics_verdict": "APPROVED",
+  "ethics_score": 8.7,
+  "ethics_concerns": [
+    "Invoice could be generated prematurely if the eligibility/completion date is entered incorrectly."
+  ],
+  "qa_score": 174,
+  "qa_max": 185,
+  "true_cost": 71.73,
+  "calls": 62,
+  "funders": [
+    "the founder"
+  ],
+  "story_url": "https://zeroorigine.com/story/retainagerecover",
+  "publisher": "ZeroOrigine",
+  "publisher_url": "https://zeroorigine.com"
 }
