@@ -1,0 +1,996 @@
+{
+  "name": "ZO-02 Build Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtMinute": 0,
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "poll-trigger",
+      "name": "Poll Sheet Every 10 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zo-build-trigger",
+        "options": {
+          "responseMode": "onReceived"
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 500],
+      "webhookId": "zo-build-trigger"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-approved",
+      "name": "Read Approved Projects",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [480, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "APPROVED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-approved",
+      "name": "Filter APPROVED Only",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Semaphore check using n8n static data\nconst staticData = $getWorkflowStaticData('global');\nconst lockKey = 'BUILD_LOCK';\nconst lockTimeout = 30 * 60 * 1000; // 30 min timeout\n\nif (staticData[lockKey]) {\n  const lockTime = new Date(staticData[lockKey]).getTime();\n  const now = Date.now();\n  if (now - lockTime < lockTimeout) {\n    // Lock is active and not timed out\n    return []; // Stop execution\n  }\n  // Lock timed out, proceed\n}\n\n// Set lock\nstaticData[lockKey] = new Date().toISOString();\n\n// Take first approved project only\nconst items = $input.all();\nif (items.length === 0) return [];\n\nreturn [items[0]];"
+      },
+      "id": "semaphore-check",
+      "name": "Semaphore Check (BUILD_LOCK)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "BUILDING",
+            "build_started_at": "={{ new Date().toISOString() }}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "set-building-status",
+      "name": "Set Status BUILDING",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1140, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const project = $input.first().json;\nconst category = project.category || 'ai-productivity';\n\n// Route to appropriate build template based on category\nconst categoryTemplates = {\n  'ai-writing': { template: 'zo-template-content', hasEditor: true },\n  'ai-analytics': { template: 'zo-template-dashboard', hasDashboard: true },\n  'ai-customer-service': { template: 'zo-template-chat', hasChat: true },\n  'ai-scheduling': { template: 'zo-template-calendar', hasCalendar: true },\n  'ai-content': { template: 'zo-template-content', hasEditor: true },\n  'ai-finance': { template: 'zo-template-dashboard', hasDashboard: true },\n  'ai-hr': { template: 'zo-template-forms', hasForms: true },\n  'ai-legal': { template: 'zo-template-documents', hasDocuments: true },\n  'ai-marketing': { template: 'zo-template-content', hasEditor: true },\n  'ai-sales': { template: 'zo-template-crm', hasCRM: true },\n  'ai-education': { template: 'zo-template-content', hasEditor: true },\n  'ai-healthcare': { template: 'zo-template-forms', hasForms: true },\n  'ai-real-estate': { template: 'zo-template-listings', hasListings: true },\n  'ai-travel': { template: 'zo-template-search', hasSearch: true },\n  'ai-food': { template: 'zo-template-marketplace', hasMarketplace: true },\n  'ai-fitness': { template: 'zo-template-tracker', hasTracker: true },\n  'ai-productivity': { template: 'zo-template-dashboard', hasDashboard: true },\n  'ai-security': { template: 'zo-template-dashboard', hasDashboard: true },\n  'ai-ecommerce': { template: 'zo-template-marketplace', hasMarketplace: true },\n  'ai-social': { template: 'zo-template-feed', hasFeed: true },\n  'ai-developer-tools': { template: 'zo-template-dashboard', hasDashboard: true },\n  'ai-design': { template: 'zo-template-canvas', hasCanvas: true }\n};\n\nconst config = categoryTemplates[category] || categoryTemplates['ai-productivity'];\n\nreturn [{\n  json: {\n    ...project,\n    build_template: config.template,\n    build_config: JSON.stringify(config),\n    repo_name: 'zo-' + (project.product_name || 'product').toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 40),\n    subdomain: (project.product_name || 'product').toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 30)\n  }\n}];"
+      },
+      "id": "dispatcher",
+      "name": "Category Dispatcher",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: 'You are Builder Mind (Schema Architect) for ZeroOrigine. Generate a complete Supabase database schema for the given product. Output valid SQL with: CREATE TABLE statements, RLS policies, indexes, seed data. Include tables: profiles (linked to auth.users), subscriptions, and product-specific tables. All tables must have id (uuid), created_at, updated_at. Enable RLS on all tables.', messages: [{ role: 'user', content: 'Generate the Supabase database schema for: ' + $json.product_name + '. Category: ' + $json.category + '. Problem: ' + $json.problem + '. Solution: ' + $json.solution + '. Key features: ' + $json.key_features + '. Template: ' + $json.build_template }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "builder-schema",
+      "name": "Builder Mind 1: Schema",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1580, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: 'You are Builder Mind (API Architect) for ZeroOrigine. Generate Next.js 14 API routes for the given product. Output TypeScript files for: /api/health (GET), /api/auth/callback (GET), /api/webhooks/stripe (POST), /api/generate (POST - main AI feature endpoint), and any product-specific endpoints. Use App Router conventions. Include proper error handling, rate limiting headers, and Supabase client usage.', messages: [{ role: 'user', content: 'Generate API routes for: ' + $json.product_name + '. Schema context: ' + ($('Builder Mind 1: Schema').first().json.content ? $('Builder Mind 1: Schema').first().json.content[0].text.substring(0, 2000) : 'N/A') + '. Features: ' + $json.key_features }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "builder-apis",
+      "name": "Builder Mind 2: APIs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8192, system: 'You are Builder Mind (Core Feature Engineer) for ZeroOrigine. Generate the main feature components for a Next.js 14 + Tailwind CSS application. Output complete React components (TypeScript, .tsx) for the core user-facing feature. Include: main feature page, key interactive components, state management with React hooks, API integration, loading/error states, responsive design with Tailwind.', messages: [{ role: 'user', content: 'Generate core feature components for: ' + $json.product_name + '. Solution: ' + $json.solution + '. Key features: ' + $json.key_features + '. Build config: ' + $json.build_config + '. API routes context: ' + ($('Builder Mind 2: APIs').first().json.content ? $('Builder Mind 2: APIs').first().json.content[0].text.substring(0, 2000) : 'N/A') }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "builder-core",
+      "name": "Builder Mind 3: Core Feature",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2020, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: 'You are Builder Mind (Auth & Payments Engineer) for ZeroOrigine. Generate authentication and payment integration code for Next.js 14 + Supabase + Stripe. Output: Supabase auth config, login/signup pages, auth middleware, Stripe checkout integration, webhook handler, subscription management page, pricing page component. Use @supabase/ssr for auth. Include proper PKCE flow.', messages: [{ role: 'user', content: 'Generate auth + payments for: ' + $json.product_name + '. Monthly price: $' + $json.monthly_price + '. Revenue model: ' + ($json.revenue_model || 'subscription') }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "builder-auth",
+      "name": "Builder Mind 4: Auth + Payments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: 'You are Builder Mind (Landing Page Designer) for ZeroOrigine. Generate a complete landing page for a micro-SaaS product using Next.js 14 + Tailwind CSS. Include: hero section with CTA, problem/solution section, features grid, pricing section, testimonials placeholder, FAQ, footer. Make it conversion-optimized with clear value proposition. Use modern design patterns. Output complete page.tsx and any sub-components.', messages: [{ role: 'user', content: 'Generate landing page for: ' + $json.product_name + '. Tagline: ' + $json.tagline + '. Problem: ' + $json.problem + '. Solution: ' + $json.solution + '. Target: ' + $json.target_audience + '. Price: $' + $json.monthly_price + '/mo. Features: ' + $json.key_features + '. Differentiation: ' + $json.differentiation }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "builder-landing",
+      "name": "Builder Mind 5: Landing Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2460, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all build outputs\nconst project = $('Category Dispatcher').first().json;\nconst schema = $('Builder Mind 1: Schema').first().json;\nconst apis = $('Builder Mind 2: APIs').first().json;\nconst core = $('Builder Mind 3: Core Feature').first().json;\nconst auth = $('Builder Mind 4: Auth + Payments').first().json;\nconst landing = $('Builder Mind 5: Landing Page').first().json;\n\nconst extractText = (resp) => {\n  if (resp.content && resp.content[0]) return resp.content[0].text;\n  return '';\n};\n\nreturn [{\n  json: {\n    ...project,\n    build_outputs: {\n      schema_sql: extractText(schema),\n      api_routes: extractText(apis),\n      core_components: extractText(core),\n      auth_payments: extractText(auth),\n      landing_page: extractText(landing)\n    },\n    build_flags: {\n      github_repo_created: false,\n      supabase_schema_created: false,\n      stripe_product_created: false,\n      netlify_site_created: false\n    }\n  }\n}];"
+      },
+      "id": "collect-build-outputs",
+      "name": "Collect Build Outputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/repos/zeroorigine/zo-saas-template/generate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ owner: 'zeroorigine', name: $json.repo_name, description: $json.tagline || $json.product_name, private: true, include_all_branches: false }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "github-create-repo",
+      "name": "GitHub Create Repo from Template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2900, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github_credentials",
+          "name": "ZO GitHub"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $input.first().json;\nprev.build_flags.github_repo_created = true;\nprev.github_repo_url = 'https://github.com/zeroorigine/' + prev.repo_name;\nreturn [{ json: prev }];"
+      },
+      "id": "flag-github",
+      "name": "Flag: GitHub Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3120, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://opgitcuqwicuiplaptkm.supabase.co/rest/v1/rpc/exec_sql",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $credentials.supabase_credentials.apiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: 'CREATE SCHEMA IF NOT EXISTS \"' + $json.subdomain + '\";' + $json.build_outputs.schema_sql.substring(0, 10000) }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "supabase-create-schema",
+      "name": "Supabase Create Schema + Tables",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3340, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase_credentials",
+          "name": "ZO Supabase"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $input.first().json;\nprev.build_flags.supabase_schema_created = true;\nreturn [{ json: prev }];"
+      },
+      "id": "flag-supabase",
+      "name": "Flag: Supabase Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3560, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/products",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.product_name }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ $json.tagline }}"
+            },
+            {
+              "name": "metadata[category]",
+              "value": "={{ $json.category }}"
+            },
+            {
+              "name": "metadata[repo]",
+              "value": "={{ $json.repo_name }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "stripe-create-product",
+      "name": "Stripe Create Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3780, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/prices",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "product",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "unit_amount",
+              "value": "={{ ($('Flag: Supabase Created').first().json.monthly_price || 19) * 100 }}"
+            },
+            {
+              "name": "currency",
+              "value": "usd"
+            },
+            {
+              "name": "recurring[interval]",
+              "value": "month"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "stripe-create-price",
+      "name": "Stripe Create Price",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4000, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Flag: Supabase Created').first().json;\nprev.build_flags.stripe_product_created = true;\nprev.stripe_product_id = $('Stripe Create Product').first().json.id;\nprev.stripe_price_id = $input.first().json.id;\nreturn [{ json: prev }];"
+      },
+      "id": "flag-stripe",
+      "name": "Flag: Stripe Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4220, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.netlify.com/api/v1/ispeedbiz/sites",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $json.subdomain + '-zeroorigine', custom_domain: $json.subdomain + '.zeroorigine.com', repo: { provider: 'github', repo: 'zeroorigine/' + $json.repo_name, branch: 'main', cmd: 'npm run build', dir: '.next' }, build_settings: { env: { NEXT_PUBLIC_SUPABASE_URL: $vars.SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY: $vars.SUPABASE_ANON_KEY, STRIPE_SECRET_KEY: $vars.STRIPE_SECRET_KEY, NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: $vars.STRIPE_PUBLISHABLE_KEY } } }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "netlify-create-site",
+      "name": "Netlify Create Site + Deploy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4440, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "netlify_credentials",
+          "name": "ZO Netlify"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Flag: Stripe Created').first().json;\nprev.build_flags.netlify_site_created = true;\nprev.netlify_site_id = $input.first().json.id;\nprev.netlify_url = $input.first().json.ssl_url || $input.first().json.url;\nreturn [{ json: prev }];"
+      },
+      "id": "flag-netlify",
+      "name": "Flag: Netlify Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4660, 200]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "BUILD_COMPLETE",
+            "build_completed_at": "={{ new Date().toISOString() }}",
+            "github_repo": "={{ $json.github_repo_url }}",
+            "netlify_url": "={{ $json.netlify_url }}",
+            "stripe_product_id": "={{ $json.stripe_product_id }}",
+            "stripe_price_id": "={{ $json.stripe_price_id }}"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-update-complete",
+      "name": "Sheet Update BUILD_COMPLETE",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [4880, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Release BUILD_LOCK\nconst staticData = $getWorkflowStaticData('global');\ndelete staticData['BUILD_LOCK'];\nreturn $input.all();"
+      },
+      "id": "release-lock",
+      "name": "Release BUILD_LOCK",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5100, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: 'ZO Build Complete: ' + $json.product_name, html: '<h2>Build Complete</h2><p><strong>' + $json.product_name + '</strong> has been built successfully.</p><ul><li>GitHub: ' + ($json.github_repo_url || 'N/A') + '</li><li>Netlify: ' + ($json.netlify_url || 'N/A') + '</li><li>Stripe Product: ' + ($json.stripe_product_id || 'N/A') + '</li></ul><p>Status: BUILD_COMPLETE - Ready for QA</p>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "build-complete-email",
+      "name": "Build Complete Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5320, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// On failure, trigger rollback workflow\nconst project = $input.first().json;\n\n// Release lock on failure too\nconst staticData = $getWorkflowStaticData('global');\ndelete staticData['BUILD_LOCK'];\n\nreturn [{\n  json: {\n    product_name: project.product_name || 'unknown',\n    repo_name: project.repo_name || '',\n    subdomain: project.subdomain || '',\n    build_flags: project.build_flags || {},\n    error: JSON.stringify(project).substring(0, 1000),\n    rollback_requested_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "prepare-rollback",
+      "name": "Prepare Rollback Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3340, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $env.ZO_WORKFLOW_02B_ROLLBACK_ID }}",
+        "options": {}
+      },
+      "id": "call-rollback",
+      "name": "Call Rollback Workflow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [3560, 500]
+    }
+  ],
+  "connections": {
+    "Poll Sheet Every 10 Min": {
+      "main": [
+        [
+          { "node": "Read Approved Projects", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          { "node": "Read Approved Projects", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Approved Projects": {
+      "main": [
+        [
+          { "node": "Filter APPROVED Only", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter APPROVED Only": {
+      "main": [
+        [
+          { "node": "Semaphore Check (BUILD_LOCK)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Semaphore Check (BUILD_LOCK)": {
+      "main": [
+        [
+          { "node": "Set Status BUILDING", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Set Status BUILDING": {
+      "main": [
+        [
+          { "node": "Category Dispatcher", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Category Dispatcher": {
+      "main": [
+        [
+          { "node": "Builder Mind 1: Schema", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Builder Mind 1: Schema": {
+      "main": [
+        [
+          { "node": "Builder Mind 2: APIs", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Builder Mind 2: APIs": {
+      "main": [
+        [
+          { "node": "Builder Mind 3: Core Feature", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Builder Mind 3: Core Feature": {
+      "main": [
+        [
+          { "node": "Builder Mind 4: Auth + Payments", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Builder Mind 4: Auth + Payments": {
+      "main": [
+        [
+          { "node": "Builder Mind 5: Landing Page", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Builder Mind 5: Landing Page": {
+      "main": [
+        [
+          { "node": "Collect Build Outputs", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Collect Build Outputs": {
+      "main": [
+        [
+          { "node": "GitHub Create Repo from Template", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GitHub Create Repo from Template": {
+      "main": [
+        [
+          { "node": "Flag: GitHub Created", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Flag: GitHub Created": {
+      "main": [
+        [
+          { "node": "Supabase Create Schema + Tables", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Supabase Create Schema + Tables": {
+      "main": [
+        [
+          { "node": "Flag: Supabase Created", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Flag: Supabase Created": {
+      "main": [
+        [
+          { "node": "Stripe Create Product", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe Create Product": {
+      "main": [
+        [
+          { "node": "Stripe Create Price", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe Create Price": {
+      "main": [
+        [
+          { "node": "Flag: Stripe Created", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Flag: Stripe Created": {
+      "main": [
+        [
+          { "node": "Netlify Create Site + Deploy", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Netlify Create Site + Deploy": {
+      "main": [
+        [
+          { "node": "Flag: Netlify Created", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Prepare Rollback Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Flag: Netlify Created": {
+      "main": [
+        [
+          { "node": "Sheet Update BUILD_COMPLETE", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update BUILD_COMPLETE": {
+      "main": [
+        [
+          { "node": "Release BUILD_LOCK", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Release BUILD_LOCK": {
+      "main": [
+        [
+          { "node": "Build Complete Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Rollback Data": {
+      "main": [
+        [
+          { "node": "Call Rollback Workflow", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York",
+    "executionTimeout": 1800
+  },
+  "staticData": {
+    "global": {}
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "build" },
+    { "name": "critical" }
+  ],
+  "triggerCount": 2,
+  "active": false,
+  "meta": {
+    "description": "Build pipeline: polls for APPROVED projects, acquires BUILD_LOCK semaphore, runs 5 sequential Builder Mind calls (schema, APIs, core feature, auth+payments, landing page), then provisions GitHub repo, Supabase schema, Stripe product+price, Netlify site. On failure calls rollback workflow.",
+    "requiredCredentials": [
+      "anthropic_credentials (HTTP Header Auth)",
+      "google_sheets_credentials (Google Sheets OAuth2)",
+      "github_credentials (HTTP Header Auth with token)",
+      "supabase_credentials (HTTP Header Auth with apikey)",
+      "stripe_credentials (HTTP Header Auth with Bearer token)",
+      "netlify_credentials (HTTP Header Auth with Bearer token)",
+      "resend_credentials (HTTP Header Auth)"
+    ],
+    "requiredEnvVars": [
+      "ANTHROPIC_API_KEY",
+      "GITHUB_TOKEN",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "STRIPE_SECRET_KEY",
+      "NETLIFY_AUTH_TOKEN",
+      "RESEND_API_KEY",
+      "ZO_WORKFLOW_02B_ROLLBACK_ID"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "version": "1.0.0"
+  }
+}

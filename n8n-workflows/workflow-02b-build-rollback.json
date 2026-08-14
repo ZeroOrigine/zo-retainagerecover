@@ -1,0 +1,447 @@
+{
+  "name": "ZO-02b Build Rollback",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst flags = input.build_flags || {};\n\nreturn [{\n  json: {\n    product_name: input.product_name,\n    repo_name: input.repo_name,\n    subdomain: input.subdomain,\n    github_repo_created: flags.github_repo_created || false,\n    supabase_schema_created: flags.supabase_schema_created || false,\n    stripe_product_created: flags.stripe_product_created || false,\n    netlify_site_created: flags.netlify_site_created || false,\n    error: input.error || 'Unknown error',\n    rollback_started_at: new Date().toISOString(),\n    rollback_results: []\n  }\n}];"
+      },
+      "id": "parse-rollback-input",
+      "name": "Parse Rollback Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.netlify_site_created }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-netlify",
+      "name": "Netlify Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.netlify.com/api/v1/sites/{{ $json.subdomain }}-zeroorigine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "DELETE",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "delete-netlify",
+      "name": "Delete Netlify Site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "netlify_credentials",
+          "name": "ZO Netlify"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Parse Rollback Input').first().json.stripe_product_created }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-stripe",
+      "name": "Stripe Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1160, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.stripe.com/v1/products/{{ $('Parse Rollback Input').first().json.stripe_product_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "active",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "archive-stripe",
+      "name": "Archive Stripe Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Parse Rollback Input').first().json.supabase_schema_created }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-supabase",
+      "name": "Supabase Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1600, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://opgitcuqwicuiplaptkm.supabase.co/rest/v1/rpc/exec_sql",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $credentials.supabase_credentials.apiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: 'DROP SCHEMA IF EXISTS \"' + $('Parse Rollback Input').first().json.subdomain + '\" CASCADE;' }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "drop-supabase",
+      "name": "Drop Supabase Schema",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1820, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase_credentials",
+          "name": "ZO Supabase"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Parse Rollback Input').first().json.github_repo_created }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-github",
+      "name": "GitHub Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2040, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/zeroorigine/{{ $('Parse Rollback Input').first().json.repo_name }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "DELETE",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "delete-github",
+      "name": "Delete GitHub Repo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2260, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github_credentials",
+          "name": "ZO GitHub"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "BUILD_FAILED",
+            "build_failed_at": "={{ new Date().toISOString() }}",
+            "error_details": "={{ $('Parse Rollback Input').first().json.error }}"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $('Parse Rollback Input').first().json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-update-failed",
+      "name": "Sheet Update BUILD_FAILED",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2500, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Release BUILD_LOCK\nconst staticData = $getWorkflowStaticData('global');\ndelete staticData['BUILD_LOCK'];\n\nreturn [{ json: { rollback_complete: true, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "release-lock-rollback",
+      "name": "Release BUILD_LOCK",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2720, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: '[ROLLBACK] Build Failed: ' + $('Parse Rollback Input').first().json.product_name, html: '<h2>Build Rollback Executed</h2><p>Product: ' + $('Parse Rollback Input').first().json.product_name + '</p><p>Error: ' + $('Parse Rollback Input').first().json.error + '</p><h3>Rollback Actions:</h3><ul><li>GitHub repo deleted: ' + $('Parse Rollback Input').first().json.github_repo_created + '</li><li>Supabase schema dropped: ' + $('Parse Rollback Input').first().json.supabase_schema_created + '</li><li>Stripe product archived: ' + $('Parse Rollback Input').first().json.stripe_product_created + '</li><li>Netlify site deleted: ' + $('Parse Rollback Input').first().json.netlify_site_created + '</li></ul><p>Status set to BUILD_FAILED. Manual review required.</p>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "rollback-email",
+      "name": "Rollback Notification Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2940, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          { "node": "Parse Rollback Input", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Rollback Input": {
+      "main": [
+        [
+          { "node": "Netlify Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Netlify Created?": {
+      "main": [
+        [
+          { "node": "Delete Netlify Site", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Stripe Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Delete Netlify Site": {
+      "main": [
+        [
+          { "node": "Stripe Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe Created?": {
+      "main": [
+        [
+          { "node": "Archive Stripe Product", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Supabase Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Archive Stripe Product": {
+      "main": [
+        [
+          { "node": "Supabase Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Supabase Created?": {
+      "main": [
+        [
+          { "node": "Drop Supabase Schema", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "GitHub Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Drop Supabase Schema": {
+      "main": [
+        [
+          { "node": "GitHub Created?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GitHub Created?": {
+      "main": [
+        [
+          { "node": "Delete GitHub Repo", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheet Update BUILD_FAILED", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Delete GitHub Repo": {
+      "main": [
+        [
+          { "node": "Sheet Update BUILD_FAILED", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update BUILD_FAILED": {
+      "main": [
+        [
+          { "node": "Release BUILD_LOCK", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Release BUILD_LOCK": {
+      "main": [
+        [
+          { "node": "Rollback Notification Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York"
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "rollback" },
+    { "name": "critical" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Rollback workflow called on build failure. Checks build_flags to determine what was created, reverses each in order (Netlify, Stripe, Supabase, GitHub), updates sheet to BUILD_FAILED, releases BUILD_LOCK, sends notification.",
+    "requiredCredentials": [
+      "github_credentials",
+      "supabase_credentials",
+      "stripe_credentials",
+      "netlify_credentials",
+      "google_sheets_credentials",
+      "resend_credentials"
+    ],
+    "requiredEnvVars": [
+      "GITHUB_TOKEN",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "STRIPE_SECRET_KEY",
+      "NETLIFY_AUTH_TOKEN",
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "version": "1.0.0"
+  }
+}

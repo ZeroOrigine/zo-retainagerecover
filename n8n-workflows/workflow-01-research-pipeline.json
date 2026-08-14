@@ -1,0 +1,568 @@
+{
+  "name": "ZO-01 Research Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 22,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily 10 PM EST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300],
+      "notes": "Fires daily at 10 PM EST (22:00 America/New_York)"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Config"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-excluded-ideas",
+      "name": "Read Excluded Ideas & Learnings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-pipeline-history",
+      "name": "Read Pipeline History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "merge-data",
+              "name": "excluded_ideas",
+              "value": "={{ $('Read Excluded Ideas & Learnings').all().filter(row => row.json.type === 'excluded_idea').map(row => row.json.idea).join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "merge-learnings",
+              "name": "learnings",
+              "value": "={{ $('Read Excluded Ideas & Learnings').all().filter(row => row.json.type === 'learning').map(row => row.json.content).join('\\n') }}",
+              "type": "string"
+            },
+            {
+              "id": "merge-history",
+              "name": "previous_products",
+              "value": "={{ $('Read Pipeline History').all().map(row => row.json.product_name).filter(Boolean).join(', ') }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "merge-context",
+      "name": "Merge Context Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: [{ type: 'text', text: 'You are Research Mind A for ZeroOrigine. You generate innovative micro-SaaS product ideas across 22 categories: ai-writing, ai-analytics, ai-customer-service, ai-scheduling, ai-content, ai-finance, ai-hr, ai-legal, ai-marketing, ai-sales, ai-education, ai-healthcare, ai-real-estate, ai-travel, ai-food, ai-fitness, ai-productivity, ai-security, ai-ecommerce, ai-social, ai-developer-tools, ai-design. Each idea must be: buildable in <4 hours with AI, have clear recurring revenue potential ($9-49/mo), solve a real pain point. Output JSON array of exactly 5 ideas with fields: name, category, tagline, problem, solution, target_audience, revenue_model, monthly_price, key_features (array of 3), differentiation.', cache_control: { type: 'ephemeral' } }], tools: [{ name: 'web_search', type: 'web_search_20250305' }], messages: [{ role: 'user', content: 'Generate 5 innovative micro-SaaS product ideas. EXCLUDE these previously built or rejected ideas: ' + $json.excluded_ideas + '. INCORPORATE these learnings from past launches: ' + $json.learnings + '. Previously built products: ' + $json.previous_products + '. Today is ' + new Date().toISOString().split('T')[0] + '. Focus on trending problems and underserved niches. Use web search to validate market demand.' }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "research-mind-a",
+      "name": "Research Mind A (Generate 5 Ideas)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "parse-ideas",
+              "name": "ideas_json",
+              "value": "={{ (() => { const content = $json.content; const textBlock = content.find(b => b.type === 'text'); if (!textBlock) return '[]'; const match = textBlock.text.match(/\\[[\\s\\S]*\\]/); return match ? match[0] : '[]'; })() }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "parse-ideas",
+      "name": "Parse Ideas from Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: [{ type: 'text', text: 'You are Research Mind B for ZeroOrigine. You evaluate micro-SaaS ideas across 7 dimensions: (1) Market Demand (0-10): Is there proven demand? (2) Build Feasibility (0-10): Can this be built in <4 hours with AI? (3) Revenue Potential (0-10): Realistic MRR at $9-49/mo? (4) Differentiation (0-10): How unique vs existing solutions? (5) Scalability (0-10): Can it grow without proportional cost? (6) Retention (0-10): Will users stick monthly? (7) Speed-to-Value (0-10): Can users see value in <2 min? Score each idea, compute weighted average (weights: demand=2, feasibility=1.5, revenue=1.5, differentiation=1, scalability=1, retention=1.5, speed=1.5). Select top 2-3 ideas scoring >= 7.0. Output JSON with fields: evaluations (array of all 5 with scores), selected (array of top 2-3 names), reasoning.', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Evaluate these 5 micro-SaaS ideas and select the top 2-3:\\n\\n' + $json.ideas_json }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "research-mind-b",
+      "name": "Research Mind B (7-Dim Evaluation)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "parse-eval",
+              "name": "evaluation_result",
+              "value": "={{ (() => { const content = $json.content; const textBlock = content.find(b => b.type === 'text'); if (!textBlock) return '{}'; const match = textBlock.text.match(/\\{[\\s\\S]*\\}/); return match ? match[0] : '{}'; })() }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "parse-evaluation",
+      "name": "Parse Evaluation",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-haiku-4-20250414', max_tokens: 2048, system: [{ type: 'text', text: 'You are the Ethics Mind for ZeroOrigine. Review product ideas through 5 ethical lenses: (1) Harm Prevention: Could this product cause harm to users or society? (2) Privacy: Does this respect user data and privacy? (3) Inclusivity: Is this accessible and non-discriminatory? (4) Transparency: Is the AI usage transparent to end users? (5) Sustainability: Is this environmentally and economically sustainable? For each idea, output: name, verdict (APPROVED or BLOCKED), concerns (array), conditions (array of conditions for approval). Block any idea that scores < 3/5 on any lens.', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Review these selected product ideas for ethical concerns:\\n\\n' + $json.evaluation_result }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "ethics-mind",
+      "name": "Ethics Mind (Approve/Block)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1820, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "parse-ethics",
+              "name": "ethics_result",
+              "value": "={{ (() => { const content = $json.content; const textBlock = content.find(b => b.type === 'text'); if (!textBlock) return '{}'; const match = textBlock.text.match(/\\{[\\s\\S]*\\}/); return match ? match[0] : '{}'; })() }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ new Date().toISOString() }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "parse-ethics",
+      "name": "Parse Ethics Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2040, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ethicsResult = JSON.parse($input.first().json.ethics_result);\nconst evalResult = JSON.parse($('Parse Evaluation').first().json.evaluation_result);\nconst ideasJson = JSON.parse($('Parse Ideas from Response').first().json.ideas_json);\nconst timestamp = $input.first().json.timestamp;\n\nconst approvedIdeas = (ethicsResult.reviews || ethicsResult.ideas || []).filter(r => r.verdict === 'APPROVED');\n\nconst rows = approvedIdeas.map(approved => {\n  const idea = ideasJson.find(i => i.name === approved.name) || {};\n  const evaluation = (evalResult.evaluations || []).find(e => e.name === approved.name) || {};\n  return {\n    json: {\n      product_name: approved.name || '',\n      category: idea.category || '',\n      tagline: idea.tagline || '',\n      problem: idea.problem || '',\n      solution: idea.solution || '',\n      target_audience: idea.target_audience || '',\n      monthly_price: idea.monthly_price || '',\n      key_features: JSON.stringify(idea.key_features || []),\n      differentiation: idea.differentiation || '',\n      weighted_score: evaluation.weighted_average || evaluation.weighted_score || '',\n      ethics_verdict: 'APPROVED',\n      ethics_conditions: JSON.stringify(approved.conditions || []),\n      status: 'PENDING_APPROVAL',\n      research_date: timestamp,\n      research_batch_id: 'RB-' + Date.now()\n    }\n  };\n});\n\nreturn rows.length > 0 ? rows : [{ json: { error: 'No approved ideas', timestamp } }];"
+      },
+      "id": "prepare-sheet-rows",
+      "name": "Prepare Sheet Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2260, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "write-to-sheet",
+      "name": "Write to Pipeline Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2480, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: 'ZO Research Pipeline - ' + new Date().toISOString().split('T')[0], html: '<h2>Research Pipeline Complete</h2><p>Date: ' + new Date().toISOString().split('T')[0] + '</p><p>Ideas generated: 5</p><p>Ideas approved: ' + $input.all().length + '</p><h3>Approved Ideas (PENDING_APPROVAL):</h3><ul>' + $input.all().map(item => '<li><strong>' + (item.json.product_name || 'Unknown') + '</strong> (' + (item.json.category || '') + ') - Score: ' + (item.json.weighted_score || 'N/A') + '</li>').join('') + '</ul><p>Review and approve in the <a href=\"https://docs.google.com/spreadsheets/d/1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E\">Master Sheet</a></p>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "send-email-summary",
+      "name": "Send Email Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2700, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: '[ERROR] ZO Research Pipeline Failed - ' + new Date().toISOString().split('T')[0], html: '<h2>Research Pipeline Error</h2><p>The research pipeline encountered an error. Check n8n execution logs.</p><p>Error: ' + JSON.stringify($json).substring(0, 500) + '</p>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "error-email",
+      "name": "Error Notification Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 520],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 10 PM EST": {
+      "main": [
+        [
+          { "node": "Read Excluded Ideas & Learnings", "type": "main", "index": 0 },
+          { "node": "Read Pipeline History", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Excluded Ideas & Learnings": {
+      "main": [
+        [
+          { "node": "Merge Context Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Pipeline History": {
+      "main": [
+        [
+          { "node": "Merge Context Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Merge Context Data": {
+      "main": [
+        [
+          { "node": "Research Mind A (Generate 5 Ideas)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Research Mind A (Generate 5 Ideas)": {
+      "main": [
+        [
+          { "node": "Parse Ideas from Response", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Error Notification Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Ideas from Response": {
+      "main": [
+        [
+          { "node": "Research Mind B (7-Dim Evaluation)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Research Mind B (7-Dim Evaluation)": {
+      "main": [
+        [
+          { "node": "Parse Evaluation", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Error Notification Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Evaluation": {
+      "main": [
+        [
+          { "node": "Ethics Mind (Approve/Block)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Ethics Mind (Approve/Block)": {
+      "main": [
+        [
+          { "node": "Parse Ethics Result", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Error Notification Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Ethics Result": {
+      "main": [
+        [
+          { "node": "Prepare Sheet Rows", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Sheet Rows": {
+      "main": [
+        [
+          { "node": "Write to Pipeline Sheet", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Write to Pipeline Sheet": {
+      "main": [
+        [
+          { "node": "Send Email Summary", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "research" },
+    { "name": "daily" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Daily research pipeline: generates 5 micro-SaaS ideas via Research Mind A, evaluates via Research Mind B (7 dimensions), ethics review via Ethics Mind, writes approved ideas to Google Sheet as PENDING_APPROVAL, sends email summary.",
+    "requiredCredentials": [
+      "anthropic_credentials (HTTP Header Auth with x-api-key)",
+      "google_sheets_credentials (Google Sheets OAuth2)",
+      "resend_credentials (HTTP Header Auth with Authorization: Bearer)"
+    ],
+    "requiredEnvVars": [
+      "ANTHROPIC_API_KEY",
+      "GOOGLE_SHEETS_CLIENT_ID",
+      "GOOGLE_SHEETS_CLIENT_SECRET",
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "schedule": "Daily 10 PM EST",
+    "version": "1.0.0"
+  }
+}

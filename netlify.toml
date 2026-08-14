@@ -1,0 +1,16 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # PREVENT layer (Mistake #39): public, shared Supabase values baked in so every product
+  # forked from this template inherits a working browser client at build time — no per-product
+  # Netlify env provisioning required. These are PUBLIC by design (anon key ships in the bundle).
+  # Secrets (SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY) are NOT here — they stay per-site,
+  # is_secret=true, functions/runtime-scoped.
+  NEXT_PUBLIC_SUPABASE_URL = "https://opgitcuqwicuiplaptkm.supabase.co"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9wZ2l0Y3Vxd2ljdWlwbGFwdGttIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NzYwNjEsImV4cCI6MjA4OTU1MjA2MX0.jOZbexswKI3w4wMI2WWvRuVKnPUMFtBeZUdG0LerL14"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

@@ -1,0 +1,537 @@
+{
+  "name": "ZO-04 Launch Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "poll-trigger",
+      "name": "Poll Sheet Every 15 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-launch-approved",
+      "name": "Read LAUNCH_APPROVED Projects",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "LAUNCH_APPROVED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-launch",
+      "name": "Filter LAUNCH_APPROVED",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.netlify.com/api/v1/sites/{{ $json.netlify_site_id }}/deploys",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "netlify-get-deploy",
+      "name": "Netlify Get Latest Deploy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [910, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "netlify_credentials",
+          "name": "ZO Netlify"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "=https://api.netlify.com/api/v1/sites/{{ $('Filter LAUNCH_APPROVED').first().json.netlify_site_id }}/deploys/{{ $json[0].id }}/restore",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "netlify-promote",
+      "name": "Netlify Promote to Production",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "netlify_credentials",
+          "name": "ZO Netlify"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "url": "https://api.cloudflare.com/client/v4/zones/{{ $env.CLOUDFLARE_ZONE_ID }}/dns_records",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'CNAME', name: $('Filter LAUNCH_APPROVED').first().json.subdomain || $('Filter LAUNCH_APPROVED').first().json.product_name.toLowerCase().replace(/[^a-z0-9]/g, '-'), content: ($('Filter LAUNCH_APPROVED').first().json.netlify_site_id || '') + '.netlify.app', ttl: 1, proxied: true }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "cloudflare-dns",
+      "name": "Cloudflare DNS CNAME",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1350, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cloudflare_credentials",
+          "name": "ZO Cloudflare"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.stripe.com/v1/products/{{ $('Filter LAUNCH_APPROVED').first().json.stripe_product_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "metadata[status]",
+              "value": "LIVE"
+            },
+            {
+              "name": "metadata[launched_at]",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "stripe-activate",
+      "name": "Stripe Activate Live Billing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1570, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: [{ type: 'text', text: 'You are Marketing Mind for ZeroOrigine. Generate all marketing content for a micro-SaaS product launch. Output JSON with: twitter_thread (array of 5 tweets, each <280 chars), linkedin_post (professional, 150 words), product_hunt_tagline (60 chars max), product_hunt_description (260 chars max), email_announcement (HTML, 200 words), meta_description (155 chars), og_title (60 chars), og_description (155 chars), launch_blog_post (500 words markdown). Tone: professional but approachable. Include relevant emojis sparingly.', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Generate launch marketing content for: ' + $('Filter LAUNCH_APPROVED').first().json.product_name + '. Tagline: ' + ($('Filter LAUNCH_APPROVED').first().json.tagline || '') + '. Problem: ' + ($('Filter LAUNCH_APPROVED').first().json.problem || '') + '. Solution: ' + ($('Filter LAUNCH_APPROVED').first().json.solution || '') + '. Target: ' + ($('Filter LAUNCH_APPROVED').first().json.target_audience || '') + '. URL: ' + ($('Filter LAUNCH_APPROVED').first().json.subdomain || '') + '.zeroorigine.com. Price: $' + ($('Filter LAUNCH_APPROVED').first().json.monthly_price || '19') + '/mo' }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "marketing-mind",
+      "name": "Marketing Mind (Generate Content)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1790, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const marketingResponse = $input.first().json;\nconst project = $('Filter LAUNCH_APPROVED').first().json;\n\nlet marketingContent;\ntry {\n  const textBlock = marketingResponse.content.find(b => b.type === 'text');\n  const match = textBlock.text.match(/\\{[\\s\\S]*\\}/);\n  marketingContent = JSON.parse(match[0]);\n} catch (e) {\n  marketingContent = { twitter_thread: [], linkedin_post: '', og_title: project.product_name, og_description: project.tagline };\n}\n\nreturn [{\n  json: {\n    ...project,\n    marketing_content: marketingContent,\n    og_image_prompt: 'Modern SaaS product hero image for ' + project.product_name + ': ' + (project.tagline || '') + '. Clean, minimal, professional design with gradient background, abstract tech elements. No text overlay.'\n  }\n}];"
+      },
+      "id": "parse-marketing",
+      "name": "Parse Marketing Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.replicate.com/v1/predictions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ version: 'black-forest-labs/flux-schnell', input: { prompt: $json.og_image_prompt, width: 1200, height: 630, num_outputs: 1 } }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "flux-og-image",
+      "name": "Flux Schnell OG Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2230, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "replicate_credentials",
+          "name": "Replicate API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 10000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.bufferapp.com/1/updates/create.json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: ($json.marketing_content.twitter_thread || ['Launching ' + $json.product_name])[0], profile_ids: [$env.BUFFER_TWITTER_PROFILE_ID, $env.BUFFER_LINKEDIN_PROFILE_ID], scheduled_at: new Date(Date.now() + 3600000).toISOString(), media: { link: 'https://' + ($json.subdomain || '') + '.zeroorigine.com' } }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "buffer-schedule",
+      "name": "Buffer Schedule Social Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2450, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "buffer_credentials",
+          "name": "Buffer API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "LIVE",
+            "launched_at": "={{ new Date().toISOString() }}",
+            "live_url": "={{ 'https://' + ($json.subdomain || '') + '.zeroorigine.com' }}",
+            "marketing_content": "={{ JSON.stringify($json.marketing_content || {}) }}"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-update-live",
+      "name": "Sheet Update LIVE",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2670, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: 'LAUNCHED: ' + $json.product_name + ' is LIVE!', html: '<h2>' + $json.product_name + ' is LIVE!</h2><p>URL: <a href=\"https://' + ($json.subdomain || '') + '.zeroorigine.com\">https://' + ($json.subdomain || '') + '.zeroorigine.com</a></p><p>Stripe billing is active. Social posts scheduled via Buffer.</p><h3>Marketing Content Generated:</h3><ul><li>Twitter thread: ' + (($json.marketing_content || {}).twitter_thread || []).length + ' tweets</li><li>LinkedIn post: Ready</li><li>OG image: Generated</li></ul>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "launch-email",
+      "name": "Launch Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2890, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Poll Sheet Every 15 Min": {
+      "main": [
+        [
+          { "node": "Read LAUNCH_APPROVED Projects", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read LAUNCH_APPROVED Projects": {
+      "main": [
+        [
+          { "node": "Filter LAUNCH_APPROVED", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter LAUNCH_APPROVED": {
+      "main": [
+        [
+          { "node": "Netlify Get Latest Deploy", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Netlify Get Latest Deploy": {
+      "main": [
+        [
+          { "node": "Netlify Promote to Production", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Netlify Promote to Production": {
+      "main": [
+        [
+          { "node": "Cloudflare DNS CNAME", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Cloudflare DNS CNAME": {
+      "main": [
+        [
+          { "node": "Stripe Activate Live Billing", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe Activate Live Billing": {
+      "main": [
+        [
+          { "node": "Marketing Mind (Generate Content)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Marketing Mind (Generate Content)": {
+      "main": [
+        [
+          { "node": "Parse Marketing Content", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Marketing Content": {
+      "main": [
+        [
+          { "node": "Flux Schnell OG Image", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Flux Schnell OG Image": {
+      "main": [
+        [
+          { "node": "Buffer Schedule Social Posts", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Buffer Schedule Social Posts": {
+      "main": [
+        [
+          { "node": "Sheet Update LIVE", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update LIVE": {
+      "main": [
+        [
+          { "node": "Launch Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York",
+    "executionTimeout": 1800
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "launch" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Launch pipeline: polls for LAUNCH_APPROVED projects, promotes Netlify deploy to production, sets Cloudflare DNS CNAME, activates Stripe live billing, generates marketing content via Marketing Mind (Sonnet), creates OG image via Flux Schnell, schedules social posts via Buffer, updates sheet to LIVE.",
+    "requiredCredentials": [
+      "anthropic_credentials",
+      "google_sheets_credentials",
+      "netlify_credentials",
+      "cloudflare_credentials",
+      "stripe_credentials",
+      "replicate_credentials (for Flux Schnell)",
+      "buffer_credentials",
+      "resend_credentials"
+    ],
+    "requiredEnvVars": [
+      "ANTHROPIC_API_KEY",
+      "NETLIFY_AUTH_TOKEN",
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_ZONE_ID",
+      "STRIPE_SECRET_KEY",
+      "REPLICATE_API_TOKEN",
+      "BUFFER_ACCESS_TOKEN",
+      "BUFFER_TWITTER_PROFILE_ID",
+      "BUFFER_LINKEDIN_PROFILE_ID",
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "version": "1.0.0"
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "name": "ZO-07 Cache Warmer",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 21,
+              "triggerAtMinute": 55
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily 9:55 PM EST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300],
+      "notes": "Fires daily at 9:55 PM EST, 5 min before research pipeline"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define all 7 Minds with their system prompts for cache warming\nconst minds = [\n  {\n    name: 'Research Mind A',\n    model: 'claude-sonnet-4-20250514',\n    system_prompt: 'You are Research Mind A for ZeroOrigine. You generate innovative micro-SaaS product ideas across 22 categories: ai-writing, ai-analytics, ai-customer-service, ai-scheduling, ai-content, ai-finance, ai-hr, ai-legal, ai-marketing, ai-sales, ai-education, ai-healthcare, ai-real-estate, ai-travel, ai-food, ai-fitness, ai-productivity, ai-security, ai-ecommerce, ai-social, ai-developer-tools, ai-design. Each idea must be: buildable in <4 hours with AI, have clear recurring revenue potential ($9-49/mo), solve a real pain point.'\n  },\n  {\n    name: 'Research Mind B',\n    model: 'claude-sonnet-4-20250514',\n    system_prompt: 'You are Research Mind B for ZeroOrigine. You evaluate micro-SaaS ideas across 7 dimensions: (1) Market Demand (0-10), (2) Build Feasibility (0-10), (3) Revenue Potential (0-10), (4) Differentiation (0-10), (5) Scalability (0-10), (6) Retention (0-10), (7) Speed-to-Value (0-10). Score each idea, compute weighted average.'\n  },\n  {\n    name: 'Ethics Mind',\n    model: 'claude-haiku-4-20250414',\n    system_prompt: 'You are the Ethics Mind for ZeroOrigine. Review product ideas through 5 ethical lenses: (1) Harm Prevention, (2) Privacy, (3) Inclusivity, (4) Transparency, (5) Sustainability.'\n  },\n  {\n    name: 'Builder Mind',\n    model: 'claude-sonnet-4-20250514',\n    system_prompt: 'You are Builder Mind for ZeroOrigine. You generate complete micro-SaaS applications using Next.js 14, Supabase, Stripe, and Tailwind CSS. You produce: database schemas, API routes, React components, authentication flows, payment integration, and landing pages.'\n  },\n  {\n    name: 'QA Mind',\n    model: 'claude-haiku-4-20250414',\n    system_prompt: 'You are QA Mind for ZeroOrigine. Run comprehensive quality assurance across 7 test categories: FUNCTIONAL, RESPONSIVE, PERFORMANCE, SECURITY, CONTENT, PAYMENT, ACCESSIBILITY.'\n  },\n  {\n    name: 'Marketing Mind',\n    model: 'claude-sonnet-4-20250514',\n    system_prompt: 'You are Marketing Mind for ZeroOrigine. Generate all marketing content for micro-SaaS product launches: Twitter threads, LinkedIn posts, Product Hunt descriptions, email announcements, meta descriptions, OG tags, blog posts.'\n  },\n  {\n    name: 'Retrospective Mind',\n    model: 'claude-sonnet-4-20250514',\n    system_prompt: 'You are the Retrospective Mind for ZeroOrigine. Analyze weekly performance through the lenses of Charlie Munger (inversion), Daniel Kahneman (cognitive biases), and Nassim Taleb (antifragility).'\n  }\n];\n\nreturn minds.map(mind => ({ json: mind }));"
+      },
+      "id": "define-minds",
+      "name": "Define 7 Minds",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: 5, system: [{ type: 'text', text: $json.system_prompt, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Warm cache. Respond with OK.' }] }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "cache-warm-call",
+      "name": "Claude API Cache Warm",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\nconst timestamp = new Date().toISOString();\n\nconst logEntries = results.map((item, index) => {\n  const mind = $('Define 7 Minds').all()[index];\n  const response = item.json;\n  \n  return {\n    mind_name: mind ? mind.json.name : 'Unknown',\n    model: mind ? mind.json.model : 'Unknown',\n    cache_warmed: response.id ? true : false,\n    usage: response.usage || {},\n    cache_creation_input_tokens: (response.usage || {}).cache_creation_input_tokens || 0,\n    cache_read_input_tokens: (response.usage || {}).cache_read_input_tokens || 0,\n    timestamp: timestamp\n  };\n});\n\nconst totalCacheCreated = logEntries.reduce((sum, e) => sum + e.cache_creation_input_tokens, 0);\nconst totalCacheRead = logEntries.reduce((sum, e) => sum + e.cache_read_input_tokens, 0);\nconst allWarmed = logEntries.every(e => e.cache_warmed);\n\nreturn [{\n  json: {\n    summary: {\n      timestamp: timestamp,\n      minds_warmed: logEntries.filter(e => e.cache_warmed).length,\n      total_minds: logEntries.length,\n      all_successful: allWarmed,\n      total_cache_creation_tokens: totalCacheCreated,\n      total_cache_read_tokens: totalCacheRead\n    },\n    details: logEntries\n  }\n}];"
+      },
+      "id": "log-results",
+      "name": "Log Cache Warm Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Daily 9:55 PM EST": {
+      "main": [
+        [
+          { "node": "Define 7 Minds", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Define 7 Minds": {
+      "main": [
+        [
+          { "node": "Claude API Cache Warm", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude API Cache Warm": {
+      "main": [
+        [
+          { "node": "Log Cache Warm Results", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York"
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "cache" },
+    { "name": "daily" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Daily cache warmer at 9:55 PM EST (5 min before research pipeline). For each of 7 Minds: sends Claude API call with full system prompt, max_tokens: 5, cache_control: ephemeral. Logs results with cache hit/miss stats.",
+    "requiredCredentials": [
+      "anthropic_credentials"
+    ],
+    "requiredEnvVars": [
+      "ANTHROPIC_API_KEY"
+    ],
+    "schedule": "Daily 9:55 PM EST",
+    "version": "1.0.0"
+  }
+}

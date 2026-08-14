@@ -1,0 +1,311 @@
+{
+  "name": "ZO-08 Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-live-products",
+      "name": "Read LIVE Products",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "LIVE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-live",
+      "name": "Filter LIVE Only",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://' + ($json.subdomain || $json.product_name.toLowerCase().replace(/[^a-z0-9]/g, '-')) + '.zeroorigine.com/api/health' }}",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 3
+            }
+          }
+        }
+      },
+      "id": "health-check",
+      "name": "HTTP GET /api/health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [910, 300],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const product = $('Filter LIVE Only').item;\nconst response = $input.first().json;\nconst timestamp = new Date().toISOString();\n\n// Calculate response time (approximate from n8n execution)\nconst startTime = Date.now();\nconst responseStatus = response.statusCode || response.status || (response.error ? 500 : 200);\nconst responseTime = response.responseTime || 0;\nconst isHealthy = responseStatus >= 200 && responseStatus < 300 && responseTime < 5000;\n\n// Classify severity\nlet severity = 'P4'; // Info\nlet isAlert = false;\n\nif (!isHealthy) {\n  if (responseStatus >= 500 || !response || response.error) {\n    severity = 'P1'; // Critical: site down\n    isAlert = true;\n  } else if (responseStatus >= 400) {\n    severity = 'P2'; // High: endpoint broken\n    isAlert = true;\n  } else if (responseTime > 5000) {\n    severity = 'P3'; // Medium: slow response\n    isAlert = false;\n  } else {\n    severity = 'P4'; // Low: minor issue\n    isAlert = false;\n  }\n}\n\nreturn [{\n  json: {\n    product_name: product.json.product_name,\n    subdomain: product.json.subdomain || product.json.product_name.toLowerCase().replace(/[^a-z0-9]/g, '-'),\n    url: 'https://' + (product.json.subdomain || product.json.product_name.toLowerCase().replace(/[^a-z0-9]/g, '-')) + '.zeroorigine.com',\n    health_status: isHealthy ? 'HEALTHY' : 'UNHEALTHY',\n    http_status: responseStatus,\n    response_time_ms: responseTime,\n    severity: severity,\n    requires_alert: isAlert,\n    checked_at: timestamp,\n    raw_response: JSON.stringify(response).substring(0, 500)\n  }\n}];"
+      },
+      "id": "classify-health",
+      "name": "Classify Health Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Incidents"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "product_name": "={{ $json.product_name }}",
+            "url": "={{ $json.url }}",
+            "status": "={{ $json.health_status }}",
+            "http_status": "={{ $json.http_status }}",
+            "response_time_ms": "={{ $json.response_time_ms }}",
+            "severity": "={{ $json.severity }}",
+            "checked_at": "={{ $json.checked_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-to-incidents",
+      "name": "Log to Incident Tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1350, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.requires_alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-alert",
+      "name": "Requires Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine Alerts <alerts@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: '[' + $json.severity + '] ' + $json.product_name + ' is ' + $json.health_status, html: '<h2 style=\"color: ' + ($json.severity === 'P1' ? 'red' : 'orange') + '\">Health Alert: ' + $json.severity + '</h2><table border=\"1\" cellpadding=\"8\"><tr><td><strong>Product</strong></td><td>' + $json.product_name + '</td></tr><tr><td><strong>URL</strong></td><td><a href=\"' + $json.url + '\">' + $json.url + '</a></td></tr><tr><td><strong>Status</strong></td><td>' + $json.health_status + '</td></tr><tr><td><strong>HTTP Code</strong></td><td>' + $json.http_status + '</td></tr><tr><td><strong>Response Time</strong></td><td>' + $json.response_time_ms + 'ms</td></tr><tr><td><strong>Severity</strong></td><td>' + $json.severity + '</td></tr><tr><td><strong>Checked At</strong></td><td>' + $json.checked_at + '</td></tr></table><p>' + ($json.severity === 'P1' ? '<strong>IMMEDIATE ACTION REQUIRED</strong>' : 'Please investigate at your earliest convenience.') + '</p>' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "alert-email",
+      "name": "Immediate Alert Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1790, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deduplicate alerts: check if we already alerted for this product recently\nconst staticData = $getWorkflowStaticData('global');\nconst product = $json.product_name;\nconst now = Date.now();\nconst cooldownMs = 30 * 60 * 1000; // 30 min cooldown between alerts for same product\n\nconst lastAlertKey = 'last_alert_' + product;\nconst lastAlert = staticData[lastAlertKey];\n\nif (lastAlert && (now - new Date(lastAlert).getTime()) < cooldownMs) {\n  // Already alerted recently, skip\n  return [];\n}\n\n// Record this alert\nstaticData[lastAlertKey] = new Date().toISOString();\nreturn $input.all();"
+      },
+      "id": "dedup-alerts",
+      "name": "Deduplicate Alerts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1570, 100]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          { "node": "Read LIVE Products", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read LIVE Products": {
+      "main": [
+        [
+          { "node": "Filter LIVE Only", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter LIVE Only": {
+      "main": [
+        [
+          { "node": "HTTP GET /api/health", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "HTTP GET /api/health": {
+      "main": [
+        [
+          { "node": "Classify Health Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Classify Health Status": {
+      "main": [
+        [
+          { "node": "Log to Incident Tab", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log to Incident Tab": {
+      "main": [
+        [
+          { "node": "Requires Alert?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Requires Alert?": {
+      "main": [
+        [
+          { "node": "Deduplicate Alerts", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Deduplicate Alerts": {
+      "main": [
+        [
+          { "node": "Immediate Alert Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York"
+  },
+  "staticData": {
+    "global": {}
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "health" },
+    { "name": "monitoring" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Health monitor every 30 min. For each LIVE product: HTTP GET /api/health, checks response status + time. If unhealthy: classifies P1-P4 severity. P1/P2 triggers immediate email alert (with 30-min cooldown dedup). All checks logged to Incidents tab.",
+    "requiredCredentials": [
+      "google_sheets_credentials",
+      "resend_credentials"
+    ],
+    "requiredEnvVars": [
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "schedule": "Every 30 minutes",
+    "version": "1.0.0"
+  }
+}

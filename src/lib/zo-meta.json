@@ -1,0 +1,4 @@
+{
+  "present": false,
+  "_note": "Sentinel. The deploy layer overwrites this file per product with real birth data (name, tagline, born, scores, cost, funders, story_url). While present is false or name is absent, /about returns 404. This file MUST exist so the static import never breaks the build (zeroorigine.com ships the sentinel and gets no About page)."
+}

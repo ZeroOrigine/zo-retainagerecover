@@ -1,0 +1,536 @@
+{
+  "name": "ZO-06 Lifecycle Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0,
+              "triggerAtDay": 1
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "1st of Month 9 AM EST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300],
+      "notes": "Fires on the 1st of each month at 9 AM EST"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-live-products",
+      "name": "Read LIVE Products",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "LIVE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-live",
+      "name": "Filter LIVE Only",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// For each LIVE product, gather metrics\nconst product = $input.first().json;\nconst productName = product.product_name;\nconst stripeProductId = product.stripe_product_id;\nconst subdomain = product.subdomain || productName.toLowerCase().replace(/[^a-z0-9]/g, '-');\n\nreturn [{\n  json: {\n    ...product,\n    subdomain: subdomain,\n    check_timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "prepare-check",
+      "name": "Prepare Product Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://opgitcuqwicuiplaptkm.supabase.co/rest/v1/{{ $json.subdomain }}_profiles?select=count",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $credentials.supabase_credentials.apiKey }}"
+            },
+            {
+              "name": "Prefer",
+              "value": "count=exact"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "supabase-signups",
+      "name": "Supabase Check Signups",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase_credentials",
+          "name": "ZO Supabase"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/subscriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "created[gte]",
+              "value": "={{ Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000) }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "stripe-revenue-check",
+      "name": "Stripe Check Revenue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://sentry.io/api/0/projects/{{ $env.SENTRY_ORG }}/{{ $('Prepare Product Check').first().json.subdomain }}/issues/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "statsPeriod",
+              "value": "30d"
+            },
+            {
+              "name": "query",
+              "value": "is:unresolved"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "sentry-errors",
+      "name": "Sentry Check Errors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sentry_credentials",
+          "name": "Sentry API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const product = $('Prepare Product Check').first().json;\nconst signupsResponse = $('Supabase Check Signups').first().json;\nconst stripeResponse = $('Stripe Check Revenue').first().json;\nconst sentryResponse = $('Sentry Check Errors').first().json;\n\n// Parse metrics\nconst signupCount = Array.isArray(signupsResponse) ? signupsResponse.length : 0;\nconst subscriptions = (stripeResponse.data || []).filter(s => \n  s.items && s.items.data && s.items.data.some(i => \n    i.price && i.price.product === product.stripe_product_id\n  )\n);\nconst monthlyRevenue = subscriptions.reduce((sum, s) => {\n  const item = s.items.data.find(i => i.price.product === product.stripe_product_id);\n  return sum + (item ? item.price.unit_amount / 100 : 0);\n}, 0);\nconst activeSubscribers = subscriptions.filter(s => s.status === 'active').length;\nconst errorCount = Array.isArray(sentryResponse) ? sentryResponse.length : 0;\n\n// Days since launch\nconst launchedAt = new Date(product.launched_at);\nconst daysSinceLaunch = Math.floor((Date.now() - launchedAt.getTime()) / (24 * 60 * 60 * 1000));\n\n// Classification logic\nlet classification;\nif (monthlyRevenue >= 100 && activeSubscribers >= 10 && errorCount < 5) {\n  classification = 'THRIVING';\n} else if (monthlyRevenue >= 50 && activeSubscribers >= 5 && errorCount < 10) {\n  classification = 'STABLE';\n} else if (monthlyRevenue >= 10 || activeSubscribers >= 2) {\n  classification = 'STRUGGLING';\n} else if (daysSinceLaunch > 30 && monthlyRevenue < 10 && activeSubscribers < 2) {\n  classification = 'FADING';\n} else if (daysSinceLaunch > 60 && monthlyRevenue === 0 && activeSubscribers === 0) {\n  classification = 'SUNSET';\n} else {\n  classification = 'STABLE'; // Default for new products\n}\n\nreturn [{\n  json: {\n    product_name: product.product_name,\n    category: product.category,\n    subdomain: product.subdomain,\n    days_since_launch: daysSinceLaunch,\n    signup_count: signupCount,\n    active_subscribers: activeSubscribers,\n    monthly_revenue_usd: monthlyRevenue,\n    error_count: errorCount,\n    classification: classification,\n    stripe_product_id: product.stripe_product_id,\n    netlify_site_id: product.netlify_site_id,\n    auto_sunset: classification === 'SUNSET'\n  }\n}];"
+      },
+      "id": "classify-product",
+      "name": "Classify Product Health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.auto_sunset }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-sunset",
+      "name": "Auto Sunset?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1620, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.stripe.com/v1/products/{{ $json.stripe_product_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "active",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "stripe-deactivate",
+      "name": "Stripe Deactivate Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1840, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "SUNSET",
+            "sunset_at": "={{ new Date().toISOString() }}",
+            "sunset_reason": "Auto-sunset: 60+ days, $0 revenue, 0 subscribers"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-sunset",
+      "name": "Sheet Update SUNSET",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2060, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "lifecycle_status": "={{ $json.classification }}",
+            "lifecycle_checked_at": "={{ new Date().toISOString() }}",
+            "monthly_revenue": "={{ $json.monthly_revenue_usd }}",
+            "active_subscribers": "={{ $json.active_subscribers }}",
+            "error_count": "={{ $json.error_count }}"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-update-lifecycle",
+      "name": "Sheet Update Lifecycle Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1840, 550],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all classification results for report\nconst items = $input.all();\nconst report = {\n  date: new Date().toISOString().split('T')[0],\n  total_products: items.length,\n  classifications: {\n    THRIVING: items.filter(i => i.json.classification === 'THRIVING').length,\n    STABLE: items.filter(i => i.json.classification === 'STABLE').length,\n    STRUGGLING: items.filter(i => i.json.classification === 'STRUGGLING').length,\n    FADING: items.filter(i => i.json.classification === 'FADING').length,\n    SUNSET: items.filter(i => i.json.classification === 'SUNSET').length\n  },\n  total_mrr: items.reduce((sum, i) => sum + (i.json.monthly_revenue_usd || 0), 0),\n  total_subscribers: items.reduce((sum, i) => sum + (i.json.active_subscribers || 0), 0),\n  products: items.map(i => i.json)\n};\n\nreturn [{ json: report }];"
+      },
+      "id": "aggregate-report",
+      "name": "Aggregate Lifecycle Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2280, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: 'ZO Lifecycle Report - ' + $json.date, html: '<h2>Monthly Lifecycle Report</h2><p>Date: ' + $json.date + '</p><h3>Portfolio Health</h3><ul><li>Total LIVE products: ' + $json.total_products + '</li><li>Total MRR: $' + $json.total_mrr.toFixed(2) + '</li><li>Total subscribers: ' + $json.total_subscribers + '</li></ul><h3>Classifications</h3><table border=\"1\" cellpadding=\"5\"><tr><th>Status</th><th>Count</th></tr><tr><td style=\"color:green\">THRIVING</td><td>' + $json.classifications.THRIVING + '</td></tr><tr><td style=\"color:blue\">STABLE</td><td>' + $json.classifications.STABLE + '</td></tr><tr><td style=\"color:orange\">STRUGGLING</td><td>' + $json.classifications.STRUGGLING + '</td></tr><tr><td style=\"color:red\">FADING</td><td>' + $json.classifications.FADING + '</td></tr><tr><td style=\"color:gray\">SUNSET</td><td>' + $json.classifications.SUNSET + '</td></tr></table><h3>Product Details</h3><pre>' + JSON.stringify($json.products.map(p => ({ name: p.product_name, status: p.classification, mrr: p.monthly_revenue_usd, subs: p.active_subscribers })), null, 2).substring(0, 3000) + '</pre>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "lifecycle-email",
+      "name": "Lifecycle Report Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2500, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "1st of Month 9 AM EST": {
+      "main": [
+        [
+          { "node": "Read LIVE Products", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read LIVE Products": {
+      "main": [
+        [
+          { "node": "Filter LIVE Only", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter LIVE Only": {
+      "main": [
+        [
+          { "node": "Prepare Product Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Product Check": {
+      "main": [
+        [
+          { "node": "Supabase Check Signups", "type": "main", "index": 0 },
+          { "node": "Stripe Check Revenue", "type": "main", "index": 0 },
+          { "node": "Sentry Check Errors", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Supabase Check Signups": {
+      "main": [
+        [
+          { "node": "Classify Product Health", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe Check Revenue": {
+      "main": [
+        [
+          { "node": "Classify Product Health", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sentry Check Errors": {
+      "main": [
+        [
+          { "node": "Classify Product Health", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Classify Product Health": {
+      "main": [
+        [
+          { "node": "Auto Sunset?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Auto Sunset?": {
+      "main": [
+        [
+          { "node": "Stripe Deactivate Product", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheet Update Lifecycle Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe Deactivate Product": {
+      "main": [
+        [
+          { "node": "Sheet Update SUNSET", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update SUNSET": {
+      "main": [
+        [
+          { "node": "Aggregate Lifecycle Report", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update Lifecycle Status": {
+      "main": [
+        [
+          { "node": "Aggregate Lifecycle Report", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Aggregate Lifecycle Report": {
+      "main": [
+        [
+          { "node": "Lifecycle Report Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York"
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "lifecycle" },
+    { "name": "monthly" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Monthly lifecycle manager: 1st of month 9 AM. For each LIVE product: checks Supabase signups, Stripe revenue, Sentry errors. Classifies: THRIVING/STABLE/STRUGGLING/FADING/SUNSET. Auto-sunsets failing products (60+ days, $0, 0 subs). Updates sheet, sends report email.",
+    "requiredCredentials": [
+      "google_sheets_credentials",
+      "supabase_credentials",
+      "stripe_credentials",
+      "sentry_credentials",
+      "resend_credentials"
+    ],
+    "requiredEnvVars": [
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "STRIPE_SECRET_KEY",
+      "SENTRY_AUTH_TOKEN",
+      "SENTRY_ORG",
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "schedule": "1st of month 9 AM EST",
+    "version": "1.0.0"
+  }
+}

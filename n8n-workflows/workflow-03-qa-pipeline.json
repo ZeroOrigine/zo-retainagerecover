@@ -1,0 +1,530 @@
+{
+  "name": "ZO-03 QA Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "poll-trigger",
+      "name": "Poll Sheet Every 15 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-build-complete",
+      "name": "Read BUILD_COMPLETE Projects",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "BUILD_COMPLETE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-build-complete",
+      "name": "Filter BUILD_COMPLETE",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Initialize QA round tracking\nconst project = $input.first().json;\nreturn [{\n  json: {\n    ...project,\n    qa_round: parseInt(project.qa_round || '0') + 1,\n    max_qa_rounds: 3,\n    qa_started_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "init-qa",
+      "name": "Initialize QA Round",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-haiku-4-20250414', max_tokens: 4096, system: [{ type: 'text', text: 'You are QA Mind for ZeroOrigine. Run comprehensive quality assurance across 7 test categories for a deployed micro-SaaS product. For each category, output: category, tests_run (array of test names), passed (boolean), issues (array of {severity: P1|P2|P3|P4, description, fix_suggestion}). Categories: 1) FUNCTIONAL: Core feature works, API endpoints respond, data persists. 2) RESPONSIVE: Mobile/tablet/desktop layouts render correctly. 3) PERFORMANCE: Page load <3s, API response <1s, no memory leaks. 4) SECURITY: Auth required for protected routes, no XSS/CSRF, RLS active, env vars not exposed. 5) CONTENT: No lorem ipsum, proper meta tags, favicon, OG tags. 6) PAYMENT: Stripe checkout flow, webhook handling, subscription management. 7) ACCESSIBILITY: Keyboard navigation, ARIA labels, color contrast, screen reader. Output JSON: { overall_verdict: \"PASS\" or \"FAIL\", categories: [...], total_issues: N, p1_count: N, p2_count: N, blocking_issues: [...] }', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Run QA on product: ' + $json.product_name + '. URL: ' + ($json.netlify_url || 'N/A') + '. GitHub: ' + ($json.github_repo || 'N/A') + '. Category: ' + $json.category + '. Features: ' + ($json.key_features || '[]') + '. QA Round: ' + $json.qa_round + '/3. Previous issues: ' + ($json.previous_qa_issues || 'None') }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "qa-mind",
+      "name": "QA Mind (7 Test Categories)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const qaResponse = $input.first().json;\nconst project = $('Initialize QA Round').first().json;\n\nlet qaResult;\ntry {\n  const content = qaResponse.content;\n  const textBlock = content.find(b => b.type === 'text');\n  const match = textBlock.text.match(/\\{[\\s\\S]*\\}/);\n  qaResult = JSON.parse(match[0]);\n} catch (e) {\n  qaResult = { overall_verdict: 'FAIL', categories: [], total_issues: 1, p1_count: 1, blocking_issues: ['Failed to parse QA response'] };\n}\n\nreturn [{\n  json: {\n    ...project,\n    qa_verdict: qaResult.overall_verdict,\n    qa_total_issues: qaResult.total_issues || 0,\n    qa_p1_count: qaResult.p1_count || 0,\n    qa_p2_count: qaResult.p2_count || 0,\n    qa_blocking_issues: JSON.stringify(qaResult.blocking_issues || []),\n    qa_full_report: JSON.stringify(qaResult),\n    qa_categories: JSON.stringify(qaResult.categories || [])\n  }\n}];"
+      },
+      "id": "parse-qa",
+      "name": "Parse QA Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.qa_verdict }}",
+              "rightValue": "PASS",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-verdict",
+      "name": "QA Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "QA_PASSED",
+            "qa_passed_at": "={{ new Date().toISOString() }}",
+            "qa_rounds": "={{ $json.qa_round }}",
+            "qa_report": "={{ $json.qa_full_report }}"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-qa-passed",
+      "name": "Sheet Update QA_PASSED",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1800, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: 'ZO QA ' + $json.qa_verdict + ': ' + $json.product_name + ' (Round ' + $json.qa_round + ')', html: '<h2>QA Report: ' + $json.product_name + '</h2><p>Verdict: <strong>' + $json.qa_verdict + '</strong></p><p>Round: ' + $json.qa_round + '/' + $json.max_qa_rounds + '</p><p>Total Issues: ' + $json.qa_total_issues + ' (P1: ' + $json.qa_p1_count + ', P2: ' + $json.qa_p2_count + ')</p><h3>Blocking Issues:</h3><pre>' + $json.qa_blocking_issues + '</pre><p><a href=\"https://docs.google.com/spreadsheets/d/1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E\">View in Sheet</a></p>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "qa-email",
+      "name": "QA Report Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2020, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.qa_round }}",
+              "rightValue": 3,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-max-rounds",
+      "name": "Under Max Rounds?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1800, 450]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: 'You are Builder Mind (Fix Mode) for ZeroOrigine. Given QA issues found, generate code fixes. Output the corrected code for each issue with file path and content. Focus on blocking issues (P1/P2) first.', messages: [{ role: 'user', content: 'Fix these QA issues for ' + $json.product_name + ':\\n\\nBlocking issues: ' + $json.qa_blocking_issues + '\\n\\nFull QA report: ' + $json.qa_full_report + '\\n\\nGitHub repo: ' + ($json.github_repo || 'N/A') }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "builder-fix",
+      "name": "Builder Mind: Fix Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2040, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare for next QA round with previous issues context\nconst project = $('Parse QA Result').first().json;\nconst fixResponse = $input.first().json;\n\nreturn [{\n  json: {\n    ...project,\n    previous_qa_issues: project.qa_blocking_issues,\n    fix_applied: true\n  }\n}];"
+      },
+      "id": "prepare-reqa",
+      "name": "Prepare Re-QA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2260, 400]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "QA_FAILED",
+            "qa_failed_at": "={{ new Date().toISOString() }}",
+            "qa_rounds": "={{ $json.qa_round }}",
+            "qa_report": "={{ $json.qa_full_report }}"
+          }
+        },
+        "options": {},
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "product_name",
+              "lookupValue": "={{ $json.product_name }}"
+            }
+          ]
+        }
+      },
+      "id": "sheet-qa-failed",
+      "name": "Sheet Update QA_FAILED",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2040, 600],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: '[QA FAILED] ' + $json.product_name + ' - Max rounds exceeded', html: '<h2>QA Failed After Max Rounds</h2><p>' + $json.product_name + ' failed QA after ' + $json.qa_round + ' rounds. Manual intervention required.</p><pre>' + $json.qa_blocking_issues + '</pre>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "qa-failed-email",
+      "name": "QA Failed Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2260, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Poll Sheet Every 15 Min": {
+      "main": [
+        [
+          { "node": "Read BUILD_COMPLETE Projects", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read BUILD_COMPLETE Projects": {
+      "main": [
+        [
+          { "node": "Filter BUILD_COMPLETE", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter BUILD_COMPLETE": {
+      "main": [
+        [
+          { "node": "Initialize QA Round", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Initialize QA Round": {
+      "main": [
+        [
+          { "node": "QA Mind (7 Test Categories)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "QA Mind (7 Test Categories)": {
+      "main": [
+        [
+          { "node": "Parse QA Result", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Parse QA Result", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse QA Result": {
+      "main": [
+        [
+          { "node": "QA Passed?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "QA Passed?": {
+      "main": [
+        [
+          { "node": "Sheet Update QA_PASSED", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Under Max Rounds?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update QA_PASSED": {
+      "main": [
+        [
+          { "node": "QA Report Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Under Max Rounds?": {
+      "main": [
+        [
+          { "node": "Builder Mind: Fix Issues", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheet Update QA_FAILED", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Builder Mind: Fix Issues": {
+      "main": [
+        [
+          { "node": "Prepare Re-QA", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheet Update QA_FAILED", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Re-QA": {
+      "main": [
+        [
+          { "node": "QA Mind (7 Test Categories)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheet Update QA_FAILED": {
+      "main": [
+        [
+          { "node": "QA Failed Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York",
+    "executionTimeout": 3600
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "qa" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "QA pipeline: polls for BUILD_COMPLETE projects, runs QA Mind (Haiku) across 7 test categories (functional, responsive, performance, security, content, payment, accessibility). On fail: loops back to Builder Mind for fixes (max 3 rounds). On pass: updates to QA_PASSED.",
+    "requiredCredentials": [
+      "anthropic_credentials",
+      "google_sheets_credentials",
+      "resend_credentials"
+    ],
+    "requiredEnvVars": [
+      "ANTHROPIC_API_KEY",
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "version": "1.0.0"
+  }
+}

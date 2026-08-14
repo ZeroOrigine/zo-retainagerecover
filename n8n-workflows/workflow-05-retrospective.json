@@ -1,0 +1,372 @@
+{
+  "name": "ZO-05 Weekly Retrospective",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 10,
+              "triggerAtMinute": 0,
+              "triggerAtDay": 1
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Monday 10 AM EST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300],
+      "notes": "Fires every Monday at 10 AM EST"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pipeline"
+        },
+        "options": {
+          "range": "A:Z"
+        }
+      },
+      "id": "read-all-projects",
+      "name": "Read All Project Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [470, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/charges",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "created[gte]",
+              "value": "={{ Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000) }}"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "stripe-revenue",
+      "name": "Stripe API Revenue (7 Days)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe_credentials",
+          "name": "ZO Stripe"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PLAUSIBLE_API_URL || 'https://plausible.io' }}/api/v1/stats/aggregate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "site_id",
+              "value": "zeroorigine.com"
+            },
+            {
+              "name": "period",
+              "value": "7d"
+            },
+            {
+              "name": "metrics",
+              "value": "visitors,pageviews,bounce_rate,visit_duration"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "plausible-analytics",
+      "name": "Plausible Analytics (7 Days)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "plausible_credentials",
+          "name": "Plausible API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const projects = $('Read All Project Data').all();\nconst stripeData = $('Stripe API Revenue (7 Days)').first().json;\nconst analyticsData = $('Plausible Analytics (7 Days)').first().json;\n\n// Summarize project data\nconst liveProducts = projects.filter(p => p.json.status === 'LIVE');\nconst thisWeekLaunched = projects.filter(p => {\n  const launchedAt = new Date(p.json.launched_at);\n  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);\n  return launchedAt > weekAgo;\n});\n\n// Revenue summary\nconst charges = (stripeData.data || []);\nconst totalRevenue = charges.reduce((sum, c) => sum + (c.amount || 0), 0) / 100;\nconst successfulCharges = charges.filter(c => c.status === 'succeeded');\n\nreturn [{\n  json: {\n    total_products: projects.length,\n    live_products: liveProducts.length,\n    launched_this_week: thisWeekLaunched.length,\n    weekly_revenue_usd: totalRevenue,\n    successful_charges: successfulCharges.length,\n    analytics: analyticsData.results || {},\n    status_breakdown: {\n      PENDING_APPROVAL: projects.filter(p => p.json.status === 'PENDING_APPROVAL').length,\n      APPROVED: projects.filter(p => p.json.status === 'APPROVED').length,\n      BUILDING: projects.filter(p => p.json.status === 'BUILDING').length,\n      BUILD_COMPLETE: projects.filter(p => p.json.status === 'BUILD_COMPLETE').length,\n      QA_PASSED: projects.filter(p => p.json.status === 'QA_PASSED').length,\n      LIVE: liveProducts.length,\n      BUILD_FAILED: projects.filter(p => p.json.status === 'BUILD_FAILED').length,\n      QA_FAILED: projects.filter(p => p.json.status === 'QA_FAILED').length,\n      SUNSET: projects.filter(p => p.json.status === 'SUNSET').length\n    },\n    product_details: liveProducts.map(p => ({\n      name: p.json.product_name,\n      category: p.json.category,\n      launched_at: p.json.launched_at,\n      url: p.json.live_url\n    }))\n  }\n}];"
+      },
+      "id": "aggregate-data",
+      "name": "Aggregate All Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.anthropic_credentials.apiKey }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "prompt-caching-2024-07-31"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: [{ type: 'text', text: 'You are the Retrospective Mind for ZeroOrigine. Analyze weekly performance data through the lenses of three thinkers: (1) Charlie Munger: Inversion thinking - what could kill us? What are we doing wrong? Mental models analysis. (2) Daniel Kahneman: Cognitive bias detection - are we falling for survivorship bias, sunk cost fallacy, or confirmation bias in our product decisions? (3) Nassim Taleb: Antifragility assessment - are our products and processes gaining from disorder? Are we exposed to black swan risks? Output JSON with: summary (3 sentences), munger_analysis (inversion insights, latticework recommendations), kahneman_analysis (bias warnings, decision quality), taleb_analysis (fragility assessment, optionality recommendations), learnings (array of {insight, action, priority}), recommendations (array of {recommendation, rationale, urgency: HIGH|MEDIUM|LOW}), metrics_commentary (analysis of revenue, traffic, conversion trends).', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Weekly retrospective data for ZeroOrigine:\\n\\n' + JSON.stringify($json, null, 2) }] }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "retrospective-mind",
+      "name": "Retrospective Mind (Munger/Kahneman/Taleb)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic_credentials",
+          "name": "Claude API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const retroResponse = $input.first().json;\nconst aggregated = $('Aggregate All Data').first().json;\n\nlet retroResult;\ntry {\n  const textBlock = retroResponse.content.find(b => b.type === 'text');\n  const match = textBlock.text.match(/\\{[\\s\\S]*\\}/);\n  retroResult = JSON.parse(match[0]);\n} catch (e) {\n  retroResult = { summary: 'Failed to parse retrospective', learnings: [], recommendations: [] };\n}\n\n// Prepare learnings for Config tab\nconst learningRows = (retroResult.learnings || []).map((l, i) => ({\n  type: 'learning',\n  content: l.insight,\n  action: l.action,\n  priority: l.priority,\n  source: 'retrospective',\n  date: new Date().toISOString().split('T')[0],\n  week: 'W' + Math.ceil((new Date().getDate()) / 7)\n}));\n\nreturn [{\n  json: {\n    retro_result: retroResult,\n    aggregated_data: aggregated,\n    learning_rows: learningRows\n  }\n}];"
+      },
+      "id": "parse-retro",
+      "name": "Parse Retrospective",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Config"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "write-learnings",
+      "name": "Write Learnings to Config Tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1500, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "ZO Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'ZeroOrigine <noreply@zeroorigine.com>', to: ['admin@zeroorigine.com'], subject: 'ZO Weekly Retrospective - ' + new Date().toISOString().split('T')[0], html: '<h2>Weekly Retrospective</h2><h3>Summary</h3><p>' + ($json.retro_result.summary || 'No summary') + '</p><h3>Key Metrics</h3><ul><li>Total products: ' + $json.aggregated_data.total_products + '</li><li>Live products: ' + $json.aggregated_data.live_products + '</li><li>Launched this week: ' + $json.aggregated_data.launched_this_week + '</li><li>Weekly revenue: $' + $json.aggregated_data.weekly_revenue_usd + '</li></ul><h3>Munger (Inversion)</h3><p>' + JSON.stringify($json.retro_result.munger_analysis || {}).substring(0, 500) + '</p><h3>Kahneman (Bias Check)</h3><p>' + JSON.stringify($json.retro_result.kahneman_analysis || {}).substring(0, 500) + '</p><h3>Taleb (Antifragility)</h3><p>' + JSON.stringify($json.retro_result.taleb_analysis || {}).substring(0, 500) + '</p><h3>Recommendations</h3><pre>' + JSON.stringify($json.retro_result.recommendations || [], null, 2).substring(0, 1000) + '</pre>' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "retro-email",
+      "name": "Weekly Summary Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1750, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "resend_credentials",
+          "name": "ZO Resend"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Monday 10 AM EST": {
+      "main": [
+        [
+          { "node": "Read All Project Data", "type": "main", "index": 0 },
+          { "node": "Stripe API Revenue (7 Days)", "type": "main", "index": 0 },
+          { "node": "Plausible Analytics (7 Days)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read All Project Data": {
+      "main": [
+        [
+          { "node": "Aggregate All Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Stripe API Revenue (7 Days)": {
+      "main": [
+        [
+          { "node": "Aggregate All Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Plausible Analytics (7 Days)": {
+      "main": [
+        [
+          { "node": "Aggregate All Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Aggregate All Data": {
+      "main": [
+        [
+          { "node": "Retrospective Mind (Munger/Kahneman/Taleb)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Retrospective Mind (Munger/Kahneman/Taleb)": {
+      "main": [
+        [
+          { "node": "Parse Retrospective", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Retrospective": {
+      "main": [
+        [
+          { "node": "Write Learnings to Config Tab", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Write Learnings to Config Tab": {
+      "main": [
+        [
+          { "node": "Weekly Summary Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/New_York"
+  },
+  "tags": [
+    { "name": "zeroorigine" },
+    { "name": "retrospective" },
+    { "name": "weekly" }
+  ],
+  "triggerCount": 1,
+  "active": false,
+  "meta": {
+    "description": "Weekly retrospective: Monday 10 AM EST. Reads all project data, Stripe revenue, Plausible analytics. Retrospective Mind (Sonnet) analyzes through Munger/Kahneman/Taleb lenses. Writes learnings to Config tab. Emails weekly summary.",
+    "requiredCredentials": [
+      "anthropic_credentials",
+      "google_sheets_credentials",
+      "stripe_credentials",
+      "plausible_credentials",
+      "resend_credentials"
+    ],
+    "requiredEnvVars": [
+      "ANTHROPIC_API_KEY",
+      "STRIPE_SECRET_KEY",
+      "PLAUSIBLE_API_KEY",
+      "PLAUSIBLE_API_URL",
+      "RESEND_API_KEY"
+    ],
+    "sheetId": "1q8OqVwBD3utj7CtGayFjaNGbUkBKZL29vFF0qs9Zj4E",
+    "schedule": "Monday 10 AM EST",
+    "version": "1.0.0"
+  }
+}
