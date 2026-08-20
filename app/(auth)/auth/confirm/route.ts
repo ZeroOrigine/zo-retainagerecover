@@ -17,6 +17,14 @@ function safeInternalPath(raw: string | null): string | null {
 }
 
 export async function GET(request: Request) {
+  // #1057: recovery links carry the session in the URL FRAGMENT (invisible to
+  // this server route, re-attached by the browser across redirects). Route
+  // recovery traffic to the reset page BEFORE any param validation.
+  const zoRecover = new URL(request.url)
+  if (zoRecover.searchParams.get('type') === 'recovery' && !zoRecover.searchParams.get('token_hash') && !zoRecover.searchParams.get('code')) {
+    return NextResponse.redirect(new URL('/reset-password', request.url))
+  }
+
   const url = new URL(request.url)
   const base = siteBase(url)
   const tokenHash = url.searchParams.get('token_hash')
@@ -38,13 +46,5 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${base}${next ?? '/reset-password'}`)
   }
 
-  // #1057: recovery links carry the session in the URL FRAGMENT, which this
-  // server route can never see but browsers re-attach across the redirect.
-  // Forward recovery traffic to the reset page; the root-layout fragment
-  // bridge consumes the hash there.
-  const zoRecover = new URL(request.url)
-  if (zoRecover.searchParams.get('type') === 'recovery' || (zoRecover.searchParams.get('next') || '').includes('reset-password')) {
-    return NextResponse.redirect(new URL('/reset-password', request.url))
-  }
   return NextResponse.redirect(`${base}${next ?? '/dashboard'}`)
 }
